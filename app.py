@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
+from scipy import stats
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from sklearn.linear_model import LinearRegression
 
 # =========================
 # CARREGAR DADOS
@@ -17,7 +21,9 @@ menu = st.sidebar.radio(
     [
         "🏠 Dashboard Principal",
         "⚠️ Impacto e Severidade",
-        "📊 Análises Extras"
+        "📈 Intervalos de Confiança",
+        "🧪 Testes de Hipóteses",
+        "📉 Regressão Linear"
     ]
 )
 if menu == "🏠 Dashboard Principal":
@@ -295,3 +301,216 @@ elif menu == "⚠️ Impacto e Severidade":
 
     with st.expander("🗺️ Severidade por estado"):
         st.pyplot(fig5)
+
+if menu == "📈 Intervalos de Confiança":
+
+    df["severidade"] = (
+    df["mortos"] * 10 +
+    df["feridos_leves"] * 2 +
+    df["pessoas"] * 0.5
+    )
+
+    st.title("📈 Intervalo de Confiança (95%)")
+
+    st.markdown("""
+    Aqui estimamos a faixa onde o valor médio provavelmente está.
+
+    👉 Exemplo:
+    - Severidade média de acidentes em cada fase do dia
+    """)
+
+    variavel = st.selectbox(
+        "📌 Variável",
+        ["severidade", "mortos", "feridos_leves", "pessoas"]
+    )
+
+    grupo = st.selectbox(
+        "📊 Agrupar por",
+        ["fase_dia", "tipo_acidente", "uf", "condicao_metereologica"]
+    )
+
+    st.divider()
+
+    def ic(x):
+        x = x.dropna()
+        if len(x) < 2:
+            return (np.nan, np.nan)
+
+        return stats.t.interval(
+            0.95,
+            len(x) - 1,
+            loc=np.mean(x),
+            scale=stats.sem(x)
+        )
+
+    ic_df = df.groupby(grupo)[variavel].apply(ic)
+
+    # transformar em tabela mais legível
+    ic_df = ic_df.apply(pd.Series)
+    ic_df.columns = ["Limite Inferior", "Limite Superior"]
+
+    st.subheader("📊 Resultado")
+
+    st.dataframe(ic_df.style.format("{:.3f}"))
+
+    st.markdown("""
+    ### 📌 Como interpretar:
+    - Cada linha = um grupo (ex: “Plena Noite”)
+    - Intervalo = faixa onde a média real provavelmente está
+    - Quanto menor o intervalo → mais confiável a média
+    """)
+
+if menu == "🧪 Testes de Hipóteses":
+
+    df["severidade"] = (
+    df["mortos"] * 10 +
+    df["feridos_leves"] * 2 +
+    df["pessoas"] * 0.5
+    )
+
+    st.title("🧪 Teste de Diferenças entre Grupos (ANOVA)")
+
+    st.markdown("""
+    Aqui verificamos se existe **diferença real** entre médias de um grupo.
+
+    Exemplo:
+    - Os acidentes são mais graves à noite do que de dia?
+    - Alguns tipos de pista são mais perigosos?
+    """)
+
+    variavel = st.selectbox(
+        "📌 O que você quer analisar?",
+        ["severidade", "mortos", "feridos_leves", "pessoas"]
+    )
+
+    grupo = st.selectbox(
+        "📊 Comparar por:",
+        ["fase_dia", "tipo_acidente", "uf", "condicao_metereologica", "tipo_pista"]
+    )
+
+    st.divider()
+
+    # -----------------------------
+    # ANOVA
+    # -----------------------------
+    grupos = [
+        df[df[grupo] == g][variavel].dropna()
+        for g in df[grupo].dropna().unique()
+    ]
+
+    f_stat, p_val = stats.f_oneway(*grupos)
+
+    st.subheader("📊 Resultado do Teste ANOVA")
+
+    col1, col2 = st.columns(2)
+    col1.metric("F-statistic", f"{f_stat:.3f}")
+    col2.metric("P-value", f"{p_val:.5f}")
+
+    st.divider()
+
+    # -----------------------------
+    # INTERPRETAÇÃO SIMPLES
+    # -----------------------------
+    if p_val < 0.05:
+        st.error("🚨 Existe diferença estatisticamente significativa entre os grupos.")
+
+        st.markdown("""
+        👉 Isso significa que **pelo menos um grupo é diferente dos outros**.
+        Mas ainda não sabemos qual.
+        """)
+
+        tukey = pairwise_tukeyhsd(
+            endog=df[variavel],
+            groups=df[grupo],
+            alpha=0.05
+        )
+
+        st.subheader("🔬 Comparações detalhadas (Tukey HSD)")
+        st.text(str(tukey))
+
+        st.info("""
+        📌 O teste de Tukey mostra **quais grupos são diferentes entre si**.
+        """)
+
+    else:
+        st.success("✅ Não há diferença significativa entre os grupos.")
+
+        st.markdown("""
+        👉 Isso sugere que os grupos têm médias **estatisticamente semelhantes**.
+        """)
+
+    st.divider()
+
+    # -----------------------------
+    # EXPLICAÇÃO FINAL
+    # -----------------------------
+    st.caption("""
+    ℹ️ ANOVA testa se existe diferença geral entre grupos.
+    Se der significativo, usamos Tukey para descobrir onde está a diferença.
+    """)
+
+if menu == "📉 Regressão Linear":
+
+    from sklearn.model_selection import train_test_split
+    from sklearn.linear_model import LinearRegression
+    from sklearn.metrics import r2_score, mean_squared_error
+
+    st.title("📉 Regressão Linear - Fatores de Severidade")
+
+    st.markdown("""
+    Aqui o modelo tenta entender como:
+    - tipo de acidente  
+    - dia da semana  
+    - horário  
+
+    influenciam a gravidade dos acidentes.
+    """)
+
+    # severidade
+    df["severidade"] = (
+        df["mortos"] * 10 +
+        df["feridos_leves"] * 2 +
+        df["pessoas"] * 0.5
+    )
+
+    df["hora"] = pd.to_datetime(df["horario"], errors="coerce").dt.hour
+
+    X = df[["tipo_acidente", "dia_semana", "hora"]]
+    y = df["severidade"]
+
+    X = pd.get_dummies(X, drop_first=True)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.3, random_state=42
+    )
+
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+
+    r2 = r2_score(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+
+    col1, col2 = st.columns(2)
+    col1.metric("📊 R² do modelo", round(r2, 3))
+    col2.metric("📉 Erro (MSE)", round(mse, 2))
+
+    st.subheader("📌 Influência das variáveis")
+
+    coef_df = pd.DataFrame({
+        "Variável": X.columns,
+        "Impacto no risco": model.coef_
+    }).sort_values("Impacto no risco", ascending=False)
+
+    st.dataframe(coef_df)
+
+    st.subheader("🎯 Real vs Previsto")
+
+    fig, ax = plt.subplots()
+    ax.scatter(y_test, y_pred)
+    ax.set_xlabel("Real")
+    ax.set_ylabel("Previsto")
+    ax.set_title("Comparação")
+
+    st.pyplot(fig)
